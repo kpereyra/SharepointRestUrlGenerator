@@ -1,0 +1,381 @@
+<html>
+
+<!-- ===================================================================
+     To use this file, place it in your Sharepoint site's SiteAssets document library. 
+     Make sure that the relative jquery path is available.
+     =================================================================== -->
+<head>
+  <style>
+  body{
+  	font-family:Arial, Helvetica, sans-serif;
+  	font-size: 12px;
+  }
+  a{
+  	color:#3F9C35;  <!-- our corporate branding for links, change to yours-->
+  	text-decoration:underline;
+  }
+  .outputValue {
+    background-color: #E9ECED;
+    font-size: 11px;
+  }
+  .columnDisplay {
+    font-size: 11px;
+    margin-left: 20px;
+    border: 1px solid gray;
+  }
+  #reviseUrl {
+    font-size: xx-small;
+  }
+  </style>
+  <script src="/_layouts/jquery/jquery-1.7.2.min.js" type="text/javascript"></script>  <!-- your query version may vary, use your own link-->
+  <script>
+  // for IE8's problem with "console.log" - otherwise the error message will fail
+    var alertFallback = true;
+     if (typeof console === "undefined" || typeof console.log === "undefined") {
+       console = {};
+       if (alertFallback) {
+           console.log = function(msg) {
+                alert(msg);
+           };
+       } else {
+           console.log = function() {};
+       }
+     }
+  </script>
+</head>
+<body>
+<script>
+
+<!-- ===================================================================
+     If this was an ASPX page instead, we could use the standard sharepoint variables to get the site name and reduce the URL parsing below. 
+     Design decision to use plain HTML.
+     =================================================================== -->
+function parseUrl() {
+  var sharepointUrl = $("#userEnteredUrl").val();
+  
+  // split the URL at the required word "List". Everything before is the site URL.
+  var urlPieces = sharepointUrl.split("/")
+  
+  // Make sure the first bit of the the site URL matches the current domain.  corporate != corporate.companyname.com
+  // array split on "/" means that urlPieces[0] is http.  urlPieces[1] is blank. urlPieces[2] is the host name.
+  thisHost = window.location.hostname;
+  matchFirstCharacters = (urlPieces[2].length>thisHost.length)?thisHost.length:urlPieces[2].length;
+  
+  if (urlPieces[2].substring(0,matchFirstCharacters) == thisHost.substring(0,matchFirstCharacters)) {
+    urlPieces[2] = thisHost;
+    var foundLists = urlPieces.indexOf("Lists"); 
+    if (foundLists > -1) {
+      var listName = urlPieces[foundLists+1];
+      var urlPiecesTrunc = urlPieces.splice(foundLists, urlPieces.length-foundLists);  // trim the array so the next step re-assembles the URL up to just before "Lists" keyword
+      var siteName = urlPieces.join('/');
+      var itemUrl = siteName+"/_api/web/Lists/getbytitle('"+listName+"')/Items"
+      
+      $("#outputArea").css('display', 'inline');
+      $("#siteUrlDisplay").text(siteName)
+      $("#listNameDisplay").val(listName)
+      $("#itemUrlDisplay").html('<a target="_blank" href="'+itemUrl+'">'+itemUrl+'</a>')
+      
+      displayColumnInternalNames (siteName, listName)
+    }
+    else
+    {
+      // foundLists=-1, there is no "Lists" keyword in the URL
+      $("#parseUrlError").text('Please enter a URL to a Sharepoint list.')
+    }
+  }
+  else
+  {
+    // The security model for the REST API requires that the URL be on the same site as this one. 
+    $("#parseUrlError").text('You must enter a sharepoint list on the same server as this page: ('+thisHost+').')
+  }
+}
+
+function refreshItemUrl () {
+
+      var listName = $("#listNameDisplay").val();
+      var siteName = $("#siteUrlDisplay").text();
+      var itemUrl = siteName+"/_api/web/Lists/getbytitle('"+listName+"')/Items"
+      $("#itemUrlDisplay").html('<a target="_blank" href="'+itemUrl+'">'+itemUrl+'</a>')
+}
+
+
+function displayColumnInternalNames(siteName, listName) {
+  columnAliasUrl = siteName+"/_api/web/Lists/getbytitle('"+listName+"')/contenttypes" +
+                   "?$select=Name,Fields/Title,Fields/InternalName" +
+                   "&$expand=Fields/Title,Fields/InternalName"
+  
+      var call = $.ajax({
+          url: columnAliasUrl,
+          type: "GET",
+          dataType: "json",
+          headers: {
+              Accept: "application/json;odata=verbose"
+          }       
+      });
+      call.done(function (data,textStatus, err){
+        columnList = data.d.results[0].Fields.results
+        
+        // array of objects holds simplified result set
+        var allColumns = [];
+        for (i=0; i<columnList.length; i++) {
+            var columnAlias = columnList[i].InternalName;
+            var columnTitle = columnList[i].Title;
+            var columnType = columnList[i].__metadata.type;
+            if (columnType.substring(0,8) == "SP.Field") {columnType = columnType.substring(8)}
+            
+            // trim off internal only column names like ContentType, FileLeafRef, FolderChildCount, ItemChildCount
+            var internalOnlyColumns = ["ContentType","FileLeafRef","FolderChildCount","ItemChildCount"]
+            if (internalOnlyColumns.indexOf(columnAlias)==-1) {
+              allColumns.push({columnAlias: columnAlias, columnTitle: columnTitle, columnType: columnType});
+            }      
+        }
+        
+        // add additional columns common to every Sharepoint list
+        allColumns.push({columnAlias: "Created", columnTitle: "Created", columnType: "Date"});
+        allColumns.push({columnAlias: "Author", columnTitle: "Created By", columnType: "Person"});
+        allColumns.push({columnAlias: "Modified", columnTitle: "Modified", columnType: "Date"});
+        allColumns.push({columnAlias: "Editor", columnTitle: "Modified By", columnType: "Person"});
+        allColumns.push({columnAlias: "ID", columnTitle: "ID", columnType: "Number"});
+        
+        drawColumnTable (allColumns);
+
+        });
+        call.fail(function (err,textStatus,errorThrown){
+            console.log(err);
+            alert("Error retrieving Items: " + err.responseText);
+            $("#resultsDiv").append(err.statusText)
+        });
+        
+    
+}
+
+function drawColumnTable (allColumns) {
+    outputTable = '<table class="columnDisplay">'
+    outputTable += '<tr><th>Column Name</th><th>Type</th><th>Internal Alias</th><th>Select</th><th>Filter</th>';
+    outputTable += '<th id="filterOperator" style="display:none">Filter Operator</th>';
+    outputTable += '<th></th>';  // this extra TH and its corresponding TD keep the hidden TH's from running together. #bugkiller
+    outputTable += '<th id="filterHeader"   style="display:none">Filter By</th></tr>'
+    for (i=0; i<allColumns.length; i++) {        
+      outputTable += '<tr>';
+      outputTable += '<td>'+ allColumns[i].columnTitle +'</td>';
+      outputTable += '<td id="type_'+ allColumns[i].columnAlias +'">'+ allColumns[i].columnType +'</td>';
+      outputTable += '<td>'+ allColumns[i].columnAlias +'</td>';
+      outputTable += '<td><input type="checkbox" id="select_'+ allColumns[i].columnAlias +'"></td>';
+      outputTable += '<td><input type="checkbox" id="filter_'+ allColumns[i].columnAlias +'"></td>';
+      
+      // Operator box defaults to >= for date columns, = for all other columns
+      greaterEqualDefault = (allColumns[i].columnType=='Date'?'selected="SELECTED"':'');
+      equalDefault = (allColumns[i].columnType=='Date'?'':'selected="SELECTED"');
+      
+      outputTable += '<td><select id="filterOperator__'+ allColumns[i].columnAlias +'" style="display:none">';
+      outputTable += '<option value="gt">></option>';
+      outputTable += '<option '+greaterEqualDefault+' value="ge">>=</option>';
+      outputTable += '<option '+equalDefault+' value="eq">=</option>';
+      outputTable += '<option value="le"><=</option>';
+      outputTable += '<option value="lt"><</option>';
+      outputTable += '</select></td><td></td>';
+      outputTable += '<td><input type="text" id="filterText__'+ allColumns[i].columnAlias +'" style="display:none"></td>';
+      outputTable += '</tr>' 
+    }
+    
+    outputTable += '</table>';
+    $("#outputAreaSelect").css("display", "inline");
+    $("#columnDisplay").html(outputTable);	
+    
+    //Check ID and title by default in the select column
+    $("#select_Title").attr('checked', true);
+    $("#select_ID").attr('checked', true);
+    
+    $('input:checkbox').change(function () {
+        var name = this.id;
+        var isFilter = (name.substring(0,7) == 'filter_');
+        if (isFilter) {
+          var associatedOperator = 'filterOperator__'+name.substring(7); // 7 = length of "filter_" in the checkbox id
+          var associatedField = 'filterText__'+name.substring(7); // 7 = length of "filter_" in the checkbox id
+          $("#"+associatedOperator).css("display", "inline");
+          $("#"+associatedField).css("display", "inline");
+          $("#"+associatedField).focus();
+          $("#filterOperator").css("display", "block");
+          $("#filterHeader").css("display", "block");
+        }
+    });
+}
+
+function selectClauseByType (columnType, columnAlias, selectSoFar) {
+  returnMe = selectSoFar;
+  switch(columnType) {
+      case "Person":
+          returnMe += columnAlias+'/Title,'+columnAlias+'/Id,'
+          break;
+      default:
+          returnMe += columnAlias+','
+  }
+  return returnMe;
+}
+
+function createSelectClause() {
+  select_clause = "$select="
+  $(":checkbox:checked").each(function () {
+          checkbox_id = $(this)[0].id;
+          if (checkbox_id.substr(0,7)=="select_") {
+            column_alias = checkbox_id.substr(7);
+            column_type = $("#type_"+column_alias).html();
+            select_clause = selectClauseByType (column_type, column_alias, select_clause);
+          } 
+   });
+   if (select_clause.substr(select_clause.length-1)==',') {
+     select_clause = select_clause.substr(0, select_clause.length -1);
+   }
+   if (select_clause=="$select=") { select_clause = "";  }
+   basicURL = $("#itemUrlDisplay").text();
+   selectURL = basicURL+"?"+select_clause
+   $("#selectClauseDisplay").text(select_clause);
+   $("#selectFilterUrlDisplay").html('<a target="_blank" href="'+ selectURL +'">'+ selectURL +'</a>');
+}
+
+
+function filterClauseByType (columnType, columnAlias, columnOperator, columnFilter, filterSoFar) {
+  returnMe = filterSoFar;
+  switch(columnType) {
+      case "Person":
+          returnMe += columnAlias+'/Title' + ' '+ columnOperator +' \'' + columnFilter + '\','
+          break;
+      default:
+          returnMe += columnAlias + ' '+ columnOperator +' \'' + columnFilter + '\','
+  }
+  return returnMe;
+}
+
+function createFilterClause() {
+  filter_clause = "$filter="
+  $(":checkbox:checked").each(function () {
+          checkbox_id = $(this)[0].id;
+          if (checkbox_id.substr(0,7)=="filter_") {
+            column_alias = checkbox_id.substr(7);
+            column_filterOp = $("#filterOperator__"+column_alias)[0].value;
+            column_filter = $("#filterText__"+column_alias)[0].value;
+            column_type = $("#type_"+column_alias).html();
+            filter_clause = filterClauseByType (column_type, column_alias, column_filterOp, column_filter, filter_clause);
+          } 
+   });
+   if (filter_clause.substr(filter_clause.length-1)==',') {
+     filter_clause = filter_clause.substr(0, filter_clause.length -1);
+   }
+   if (filter_clause=="$filter=") { filter_clause = ""; }
+   basicURL = $("#itemUrlDisplay").text();
+   selectClause = $("#selectClauseDisplay").text();
+   
+   $("#filterClauseDisplay").text(filter_clause);
+}
+
+function createExpandClause() {
+  expand_clause = "$expand="
+  $(":checkbox:checked").each(function () {
+          checkbox_id = $(this)[0].id;
+          if (checkbox_id.substr(0,7)=="select_" || checkbox_id.substr(0,7)=="filter_") {
+            column_alias = checkbox_id.substr(7);
+            column_type = $("#type_"+column_alias).html();
+            if (column_type == "Person") {expand_clause += column_alias + ',';}
+          } 
+   });
+   if (expand_clause.substr(expand_clause.length-1)==',') {
+     expand_clause = expand_clause.substr(0, expand_clause.length -1);
+   }
+   if (expand_clause=="$expand=") { expand_clause = ""; }
+   basicURL = $("#itemUrlDisplay").text();
+   selectClause = $("#selectClauseDisplay").text();
+   
+   parameters = (select_clause=="")?((filter_clause=="")?"":"?"+filter_clause):((filter_clause=="")?"?"+select_clause:"?"+select_clause+"&"+filter_clause);
+   expandURL = basicURL+parameters+"&"+expand_clause;
+   
+   $("#expandClauseDisplay").text(expand_clause);
+   $("#selectFilterUrlDisplay").html('<a target="_blank" href="'+ expandURL +'">'+ expandURL +'</a>');
+}
+
+function clearOutputs () {
+    $("#outputArea").css('display', 'none');
+}
+</script>
+
+<!-- ===================================================================
+     HTML
+     =================================================================== -->
+
+This page will help you build your REST API call to your Sharepoint list.</br></br>
+
+Enter the URL to the main page of your list:
+<input id="userEnteredUrl" type="text" size="150" value="http://YOURSERVER.YOURCOMPANY.com/YOURSITE/Lists/YOURLISTNAME/AllItems.aspx"></input><br/>
+<div id="getUrlInfo"><button>Get Listing URL</button></div>
+
+<hr>
+<div id="outputArea" style="display:none">
+
+    <!-- =========== Phase 2 (after first click) ======================= -->
+  <blockquote>
+    Your site URL: <span id="siteUrlDisplay" class="outputValue"></span><br/>
+    Your list Name: <input id="listNameDisplay" class="outputValue" type="text" size="40" onchange="refreshItemUrl()"/><button onclick="refreshItemUrl()" id="reviseUrl">Revise URL</button><br/>
+    URL to get a full listing of your list items:<br/>
+    <span id="itemUrlDisplay" class="outputValue"></span><br/>
+    <br/>
+    <div id="outputAreaSelect" style="display:none">
+    <br/><br/><div class="showMore" id="showSelectClause"><button>Show more</button></div>
+      
+    <!-- =========== Phase 3 (after second click) ======================= -->
+      <div id="selectClauseArea" style="display:none">
+      These checkboxes show the columns in your list.  Check the boxes to choose columns to display and/or filter.
+      <i>Note: this helper app does NOT work yet on lookup columns.  For Person columns, use the format <i>Lastname, Firstname</i> in your filters.</i>
+        <span id="columnDisplay" class="outputValue"></span><br/>
+    <div id="getSelectInfo"><button>Get listing URL for these columns</button></div>
+    <!-- =========== Phase 4 (after selecting checkboxes) ======================= -->
+<div id="outputAreaSelectUrl" style="display:none">
+      <blockquote>
+        Your select clause: <span id="selectClauseDisplay" class="outputValue"></span><br/>
+        Your filter clause: <span id="filterClauseDisplay" class="outputValue"></span><br/>
+        Your expand clause: <span id="expandClauseDisplay" class="outputValue"></span><br/>
+        URL with select, filter, expand: <span id="selectFilterUrlDisplay" class="outputValue" onclick="document.getElementById('whatToDo').style.display='block'"></span><br/>
+        <br/>
+        Click the URL above. Did you get an error?
+        <div id="whatToDo" style="display:none">
+        <ul><li><b>Yes, error</b>: report it via the <a href="http://YOURCOMPANY/YOURSITE">Help Portal</a>. Be sure to include the URL.</li>
+            <li><b>No, it says <code>"&lt;?xml version="1.0" encoding="utf-8"?&gt;&lt;feed xml" and some other stuff</code></b>: Good!  Now Search the page for a couple of your data values.<br>
+                <ul><li><b>I found my data values</b>: you will be able to use this URL in your workflow or app.</li>
+                    <li><b>No data values</b>: report the issue via the <a href="http://YOURCOMPANY/YOURSITE">Help Portal</a>. Be sure to include the URL.</li>
+                </ul>
+             </li>
+        </ul>
+        </div>
+        </div>
+      </blockquote>
+    </div>
+    </div>
+  </blockquote>
+</div>
+
+<div class="errorMessage" id="parseUrlError"></div>
+<script>
+  //===================================================================
+  // Interactivity (click events)
+  //===================================================================
+  
+  $( "#getSelectInfo" ).click(function() {
+    createSelectClause();
+    createFilterClause();
+    createExpandClause();
+    $("#outputAreaSelectUrl").css('display', 'inline');
+  });
+  
+  $( "#showSelectClause" ).click(function() {
+      $("#showSelectClause").css('display', 'none');
+      $("#selectClauseArea").css('display', 'inline');
+  });
+  
+  $( "#userEnteredUrl" ).click(function() {
+    clearOutputs();
+  });
+  
+  $( "#getUrlInfo" ).click(function() {
+    parseUrl();
+  });
+</script>
+</body>
+</html>

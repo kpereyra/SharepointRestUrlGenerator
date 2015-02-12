@@ -207,6 +207,9 @@ function selectClauseByType (columnType, columnAlias, selectSoFar) {
       case "Person":
           returnMe += columnAlias+'/Title,'+columnAlias+'/Id,'
           break;
+      case "Lookup":
+          returnMe += columnAlias+'/Title,'+columnAlias+'/Id,'
+          break;
       default:
           returnMe += columnAlias+','
   }
@@ -270,14 +273,17 @@ function createFilterClause() {
 
 function createExpandClause() {
   expand_clause = "$expand="
+  // go through the checked items, add on Lookup or Person to the expand clause
   $(":checkbox:checked").each(function () {
           checkbox_id = $(this)[0].id;
           if (checkbox_id.substr(0,7)=="select_" || checkbox_id.substr(0,7)=="filter_") {
             column_alias = checkbox_id.substr(7);
             column_type = $("#type_"+column_alias).html();
-            if (column_type == "Person") {expand_clause += column_alias + ',';}
+            if (column_type == "Person" || column_type == "Lookup") {expand_clause += column_alias + ',';}
           } 
    });
+   
+   // trim trailing comma
    if (expand_clause.substr(expand_clause.length-1)==',') {
      expand_clause = expand_clause.substr(0, expand_clause.length -1);
    }
@@ -323,7 +329,7 @@ Enter the URL to the main page of your list:
     <!-- =========== Phase 3 (after second click) ======================= -->
       <div id="selectClauseArea" style="display:none">
       These checkboxes show the columns in your list.  Check the boxes to choose columns to display and/or filter.
-      <i>Note: this helper app does NOT work yet on lookup columns.  For Person columns, use the format <i>Lastname, Firstname</i> in your filters.</i>
+      <i>For Person columns, use the format <i>Lastname, Firstname</i> in your filters.</i>
         <span id="columnDisplay" class="outputValue"></span><br/>
     <div id="getSelectInfo"><button>Get listing URL for these columns</button></div>
     <!-- =========== Phase 4 (after selecting checkboxes) ======================= -->
